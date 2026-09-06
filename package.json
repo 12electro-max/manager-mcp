@@ -1,0 +1,14 @@
+{
+  "name": "manager-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "agents": "latest",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  }
+}
