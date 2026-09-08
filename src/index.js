@@ -2,7 +2,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-async function managerGet(env, path, params = {}) {
+async function managerRequest(env, method, path, body = null, params = {}) {
   if (!env.MANAGER_API_URL || !env.MANAGER_API_KEY) {
     throw new Error("Manager API credentials are not configured in Cloudflare.");
   }
@@ -17,33 +17,50 @@ async function managerGet(env, path, params = {}) {
     }
   }
 
-  const response = await fetch(url.toString(), {
-    method: "GET",
+  const options = {
+    method,
     headers: {
       "X-API-KEY": env.MANAGER_API_KEY,
-      "Accept": "application/json",
+      Accept: "application/json",
     },
-  });
+  };
 
+  if (body !== null) {
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(url.toString(), options);
   const text = await response.text();
 
   if (!response.ok) {
     throw new Error(
-      `Manager API request failed with status ${response.status}: ${text}`
+      `Manager API ${method} failed with status ${response.status}: ${text}`
     );
+  }
+
+  if (!text) {
+    return {
+      success: true,
+      status: response.status,
+    };
   }
 
   try {
     return JSON.parse(text);
   } catch {
-    return text;
+    return {
+      success: true,
+      status: response.status,
+      response: text,
+    };
   }
 }
 
 function createServer(env) {
   const server = new McpServer({
     name: "Manager MCP",
-    version: "1.1.0",
+    version: "2.0.0",
   });
 
   server.registerTool(
@@ -71,9 +88,13 @@ function createServer(env) {
     },
     async () => {
       try {
-        const data = await managerGet(env, "sales-invoices", {
-          pageSize: 1,
-        });
+        const data = await managerRequest(
+          env,
+          "GET",
+          "sales-invoices",
+          null,
+          { pageSize: 1 }
+        );
 
         return {
           content: [
@@ -112,50 +133,10 @@ function createServer(env) {
   );
 
   server.registerTool(
-    "list_sales_invoices",
-    {
-      description:
-        "Read sales invoices from Manager.io. This tool is read-only and does not create, edit, or delete anything.",
-      inputSchema: {
-        term: z.string().optional().describe("Optional search term"),
-        pageSize: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe("Number of invoices to return, maximum 100"),
-        skip: z
-          .number()
-          .int()
-          .min(0)
-          .optional()
-          .describe("Number of invoices to skip"),
-      },
-    },
-    async ({ term, pageSize = 20, skip = 0 }) => {
-      const data = await managerGet(env, "sales-invoices", {
-        term,
-        pageSize,
-        skip,
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(data, null, 2),
-          },
-        ],
-      };
-    }
-  );
-
-  server.registerTool(
     "manager_read",
     {
       description:
-        "Read a permitted Manager.io API2 collection. Read-only. Allowed collections: customers, sales-invoices, purchase-invoices, receipts, payments, bank-accounts.",
+        "Read Manager.io data. Read-only. Allowed collections: customers, sales-invoices, purchase-invoices, receipts, payments, bank-accounts.",
       inputSchema: {
         collection: z.enum([
           "customers",
@@ -171,11 +152,17 @@ function createServer(env) {
       },
     },
     async ({ collection, term, pageSize = 20, skip = 0 }) => {
-      const data = await managerGet(env, collection, {
-        term,
-        pageSize,
-        skip,
-      });
+      const data = await managerRequest(
+        env,
+        "GET",
+        collection,
+        null,
+        {
+          term,
+          pageSize,
+          skip,
+        }
+      );
 
       return {
         content: [
@@ -185,6 +172,183 @@ function createServer(env) {
           },
         ],
       };
+    }
+  );
+
+  server.registerTool(
+    "manager_create",
+    {
+      description:
+        "Create a new Manager.io record. Allowed resources: customer, sales-invoice, purchase-invoice, receipt, payment.",
+      inputSchema: {
+        resource: z.enum([
+          "customer",
+          "sales-invoice",
+          "purchase-invoice",
+          "receipt",
+          "payment",
+        ]),
+        data: z.record(z.any()),
+        confirmation: z
+          .string()
+          .describe('Must be exactly "CREATE" to perform the creation'),
+      },
+    },
+    async ({ resource, data, confirmation }) => {
+      if (confirmation !== "CREATE") {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                'Creation cancelled. confirmation must be exactly "CREATE".',
+            },
+          ],
+        };
+      }
+
+      const formMap = {
+        customer: "customer-form",
+        "sales-invoice": "sales-invoice-form",
+        "purchase-invoice": "purchase-invoice-form",
+        receipt: "receipt-form",
+        payment: "payment-form",
+      };
+
+      try {
+        const result = await managerRequest(
+          env,
+          "POST",
+          formMap[resource],
+          data
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  success: true,
+                  action: "created",
+                  resource,
+                  result,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  success: false,
+                  action: "create",
+                  resource,
+                  error: String(error.message || error),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "manager_update",
+    {
+      description:
+        "Update an existing Manager.io record by UUID key. Allowed resources: customer, sales-invoice, purchase-invoice, receipt, payment.",
+      inputSchema: {
+        resource: z.enum([
+          "customer",
+          "sales-invoice",
+          "purchase-invoice",
+          "receipt",
+          "payment",
+        ]),
+        key: z.string().uuid(),
+        data: z.record(z.any()),
+        confirmation: z
+          .string()
+          .describe('Must be exactly "UPDATE" to perform the update'),
+      },
+    },
+    async ({ resource, key, data, confirmation }) => {
+      if (confirmation !== "UPDATE") {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                'Update cancelled. confirmation must be exactly "UPDATE".',
+            },
+          ],
+        };
+      }
+
+      const formMap = {
+        customer: "customer-form",
+        "sales-invoice": "sales-invoice-form",
+        "purchase-invoice": "purchase-invoice-form",
+        receipt: "receipt-form",
+        payment: "payment-form",
+      };
+
+      try {
+        const result = await managerRequest(
+          env,
+          "PUT",
+          `${formMap[resource]}/${key}`,
+          data
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  success: true,
+                  action: "updated",
+                  resource,
+                  key,
+                  result,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  success: false,
+                  action: "update",
+                  resource,
+                  key,
+                  error: String(error.message || error),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
     }
   );
 
@@ -200,7 +364,7 @@ export default {
         status: "online",
         service: "Manager MCP",
         mcp_endpoint: "/mcp",
-        mode: "read-only",
+        capabilities: ["read", "create", "update"],
       });
     }
 
