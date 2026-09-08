@@ -4,7 +4,7 @@ import { z } from "zod";
 
 async function managerRequest(env, method, path, body = null, params = {}) {
   if (!env.MANAGER_API_URL || !env.MANAGER_API_KEY) {
-    throw new Error("Manager API credentials are not configured in Cloudflare.");
+    throw new Error("Manager connection is not configured.");
   }
 
   const base = env.MANAGER_API_URL.replace(/\/+$/, "");
@@ -113,8 +113,8 @@ function createServer(env) {
   server.registerTool(
     "manager_connection_test",
     {
-      description:
-        "Test whether the MCP server can connect to Manager.io using the configured API credentials",
+     description:
+  "Test whether the Manager.io connection is working",
       inputSchema: {},
     },
     async () => {
