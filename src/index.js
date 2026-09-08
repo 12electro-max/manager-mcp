@@ -261,7 +261,67 @@ function createServer(env) {
       }
     }
   );
+server.registerTool(
+  "manager_get_form",
+  {
+    description:
+      "Inspect the exact Manager.io form fields of an existing record before creating or updating another record. Use this instead of guessing Manager.io field names.",
+    inputSchema: {
+      resource: z.enum([
+        "customer",
+        "sales-invoice",
+        "purchase-invoice",
+        "receipt",
+        "payment",
+      ]),
+      key: z.string().uuid(),
+    },
+  },
+  async ({ resource, key }) => {
+    const formMap = {
+      customer: "customer-form",
+      "sales-invoice": "sales-invoice-form",
+      "purchase-invoice": "purchase-invoice-form",
+      receipt: "receipt-form",
+      payment: "payment-form",
+    };
 
+    try {
+      const data = await managerRequest(
+        env,
+        "GET",
+        `${formMap[resource]}/${key}`
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(data, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: false,
+                resource,
+                key,
+                error: String(error.message || error),
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  }
+);
   server.registerTool(
     "manager_update",
     {
